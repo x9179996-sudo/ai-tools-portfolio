@@ -1,0 +1,30 @@
+# ai-tools-portfolio — 純靜態網頁（index.html + tools.json）
+# 預防性設定：目前版控裡沒有任何污染，這份是為了不要重演
+# video-narrator 那個問題（.gitignore 加得比初始 commit 晚，
+# 已被追蹤的檔案就再也擋不住了）。
+
+# 編輯器與系統雜項
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# 備份檔（用 *.bak* 而非 *.bak，才涵蓋 .bak2 / .bak3 這類編號備份）
+*.bak*
+
+# 機密：絕不進版控
+.env
+.env.*
+!.env.example
+
+# 本機工具鏈產物。此專案目前不用 Node / Python，
+# 但先擋著，之後若加了建置流程或輔助腳本才不會來不及。
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# 日誌
+*.log
