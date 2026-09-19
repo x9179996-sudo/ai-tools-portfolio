@@ -136,6 +136,8 @@ main{padding:2rem 3rem}
 
 .spinner{display:inline-block;width:11px;height:11px;border:2px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+#stale-banner{margin:0 0 1.25rem;padding:.9rem 1.1rem;border:1px solid #d9a441;border-left-width:4px;border-radius:var(--rs,8px);background:#fdf5e3;color:#6b4c12;font-size:1rem;line-height:1.7}
+#stale-banner b{font-weight:700}
 #toast{position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:.6rem 1.2rem;border-radius:var(--r);font-family:var(--mono);font-size:.8rem;z-index:9999;opacity:0;pointer-events:none;transition:opacity .3s;display:none}
 
 @media(max-width:700px){
@@ -167,7 +169,6 @@ main{padding:2rem 3rem}
     <span class="filter-label">排序</span>
     <select id="sort-select" class="sort-sel" onchange="renderGrid()">
       <option value="newest">最新加入</option>
-      <option value="popular">熱門點擊</option>
       <option value="subject">學科分類</option>
     </select>
   </div>
@@ -181,6 +182,7 @@ main{padding:2rem 3rem}
 </div>
 
 <main>
+  <div id="stale-banner" style="display:none"></div>
   <div class="section-hd" id="result-label">所有工具</div>
   <div id="grid"></div>
 </main>
@@ -228,8 +230,11 @@ main{padding:2rem 3rem}
       </div>
       <div class="btn-row">
         <button class="ai-btn" id="analyze-btn" onclick="analyzeCode()">AI 自動分析</button>
-        <button class="ai-btn green" id="thumb-btn" onclick="triggerThumb()">重新截圖</button>
         <div class="ai-status" id="ai-status"></div>
+      </div>
+      <div class="hint">
+        縮圖改用即時預覽，不再自動截圖。工具卡片會直接把程式碼跑在沙箱裡當縮圖，
+        所以不需要事先產生圖片；產生的 JSON 裡 <code>thumb</code> 留空即可。
       </div>
       <div class="field"><label>工具名稱 *</label><input type="text" id="inp-title" placeholder="例如：數學一百格大挑戰"></div>
       <div class="field"><label>簡要說明</label><textarea class="desc-area" id="inp-desc" placeholder="這個工具能做什麼？適合哪些學生？"></textarea></div>
@@ -291,15 +296,6 @@ main{padding:2rem 3rem}
           <option value="gemini-1.5-flash">gemini-1.5-flash（備選）</option>
         </select>
       </div>
-      <div class="field">
-        <label>tools.json 網址</label>
-        <input type="text" id="inp-json-url" placeholder="https://username.github.io/repo/tools.json">
-        <div class="hint">
-          填入你 GitHub Pages 上 tools.json 的完整網址。<br>
-          格式：<code>https://你的帳號.github.io/repo名稱/tools.json</code><br>
-          留空時從本機 localStorage 讀取（本機開發用）。
-        </div>
-      </div>
     </div>
     <div class="modal-ft">
       <button class="btn-cancel" onclick="closeModal('settings-modal')">取消</button>
@@ -309,7 +305,6 @@ main{padding:2rem 3rem}
 </div>
 
 <div id="toast"></div>
-<iframe id="thumb-iframe" style="position:fixed;left:-9999px;top:0;width:800px;height:500px;border:none;visibility:hidden;pointer-events:none" sandbox="allow-scripts"></iframe>
 
 <script>
 /* ══ 避免字面 close-script 字串 ══ */
@@ -337,7 +332,7 @@ function prepareForIframe(code){ return rewriteCDN(code); }
 /* ══ 常數 ══ */
 var SK_API   = 'ap_apikey';   /* 僅用於清除舊版殘留，不再寫入 */
 var SK_MODEL = 'ap_model';
-var SK_JURL  = 'ap_jsonurl';
+var SK_JURL  = 'ap_jsonurl';  /* 僅用於清除舊版殘留，不再讀也不再寫 */
 
 /* API Key 只存在這個分頁的記憶體，重新整理即消失。
    理由：本站與其他專案共用 x9179996-sudo.github.io 這一個 origin，
@@ -349,9 +344,6 @@ var FUNCS    = ['語音','遊戲','測驗','記錄','閃卡','計算','故事','
 
 var tools = [];
 var filters = {s:[],g:[],f:[],q:''};
-var _pendingThumb = null;
-var _thumbResolve = null;
-var _thumbTimer   = null;
 var _jsonStr = '';
 
 /* ══ Toast ══ */
@@ -365,16 +357,17 @@ function showToast(msg){
 /* ══ 設定 ══ */
 function getApiKey(){ return _apiKey; }
 
-/* 舊版把 API Key 寫進 localStorage，已不再使用；開頁時清掉殘留並告知。 */
+/* 舊版把 API Key 與 tools.json 網址寫進 localStorage，兩者都已不再使用；
+   開頁時清掉殘留並告知。 */
 function purgeLegacyApiKey(){
-  var hadKey=false;
+  var hadKey=false, hadUrl=false;
   try{
     hadKey = localStorage.getItem(SK_API)!==null;  if(hadKey) localStorage.removeItem(SK_API);
+    hadUrl = localStorage.getItem(SK_JURL)!==null; if(hadUrl) localStorage.removeItem(SK_JURL);
   }catch(e){}
-  if(hadKey) showToast('已清除舊設定：API Key 不再儲存（請重新輸入）');
+  if(hadKey||hadUrl) showToast('已清除舊設定：API Key 不再儲存（請重新輸入），工具來源固定讀 tools.json');
 }
 function getModel(){  try{return localStorage.getItem(SK_MODEL)||'gemini-2.5-flash';}catch(e){return 'gemini-2.5-flash';} }
-function getJsonUrl(){ try{return localStorage.getItem(SK_JURL)||'';}catch(e){return '';} }
 
 function updateSettingsBtn(){
   var btn=document.getElementById('settings-btn');
@@ -384,14 +377,12 @@ function updateSettingsBtn(){
 function openSettings(){
   document.getElementById('inp-apikey').value=getApiKey();
   document.getElementById('inp-model').value=getModel();
-  document.getElementById('inp-json-url').value=getJsonUrl();
   document.getElementById('settings-modal').classList.add('open');
 }
 function saveSettings(){
   _apiKey = document.getElementById('inp-apikey').value.trim();  /* 只進記憶體 */
   try{
     localStorage.setItem(SK_MODEL, document.getElementById('inp-model').value);
-    localStorage.setItem(SK_JURL, document.getElementById('inp-json-url').value.trim());
   }catch(e){}
   updateSettingsBtn();
   closeModal('settings-modal');
@@ -399,67 +390,51 @@ function saveSettings(){
   loadTools();
 }
 
-/* ══ 載入工具資料 ══ */
-function loadTools(){
-  var jsonUrl = getJsonUrl();
-  if(jsonUrl){
-    fetch(jsonUrl + '?t=' + Date.now())
-      .then(function(r){ return r.json(); })
-      .then(function(data){
-        tools = (data.tools || data || []);
-        renderGrid();
-      })
-      .catch(function(){
-        showToast('無法載入 tools.json，改用本機資料');
-        loadLocalTools();
-      });
-  } else {
-    loadLocalTools();
-  }
+/* ══ 載入工具資料 ══
+   遠端 tools.json 是唯一真相；ap_tools 只是離線快取，永遠不是權威來源。
+   每次載入都先抓遠端，成功就覆寫快取；抓不到才降級用快取，並在畫面上標示。 */
+/* 來源寫死成相對路徑；只有在本機開發時才允許用 ?tools=... 指向別的 JSON，
+   線上（任何非 localhost 的 hostname）一律忽略該參數。 */
+function toolsSource(){
+  var DEFAULT_SRC = 'tools.json';
+  var h = location.hostname;
+  if(h !== 'localhost' && h !== '127.0.0.1') return DEFAULT_SRC;
+  var m = /[?&]tools=([^&]*)/.exec(location.search);
+  if(!m || !m[1]) return DEFAULT_SRC;
+  try{ return decodeURIComponent(m[1]); }catch(e){ return DEFAULT_SRC; }
 }
 
-function loadLocalTools(){
+function setStaleBanner(mode){
+  var el=document.getElementById('stale-banner');
+  if(!mode){ el.style.display='none'; el.textContent=''; return; }
+  el.innerHTML = (mode==='cache')
+    ? '<b>目前顯示的是離線快取，可能不是最新版。</b>　無法讀取 tools.json，畫面上的工具來自這台裝置上次存下的副本。'
+    : '<b>目前沒有可顯示的工具。</b>　無法讀取 tools.json，這台裝置上也沒有快取。';
+  el.style.display='';
+}
+
+function loadTools(){
+  var src = toolsSource();
+  fetch(src + (src.indexOf('?')>=0?'&':'?') + 't=' + Date.now())
+    .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(function(data){
+      tools = (data.tools || data || []);
+      cacheTools();              /* 遠端成功 → 覆寫快取 */
+      setStaleBanner(null);
+      renderGrid();
+    })
+    .catch(function(){
+      loadCachedTools();         /* 遠端失敗 → 降級 */
+    });
+}
+
+function loadCachedTools(){
   try{ tools = JSON.parse(localStorage.getItem('ap_tools')) || []; }catch(e){ tools=[]; }
-  if(!tools.length) seedDemo();
+  setStaleBanner(tools.length ? 'cache' : 'empty');
   renderGrid();
 }
-function saveLocalTools(){ localStorage.setItem('ap_tools', JSON.stringify(tools)); }
+function cacheTools(){ try{ localStorage.setItem('ap_tools', JSON.stringify(tools)); }catch(e){} }
 
-function seedDemo(){
-  tools=[{
-    id:'demo1', title:'數學一百格大挑戰',
-    desc:'加減乘除四種模式的一百格計算訓練，支援計時、進度追蹤與紀錄保存，適合全年級練習基礎運算。',
-    subjects:['數學'], grades:['低年級','中年級','高年級'], funcs:['遊戲','測驗','記錄'],
-    url:'', code: getDemoCode(), thumb:'', date: new Date().toISOString().slice(0,10), views:0
-  }];
-  saveLocalTools();
-}
-
-/* ══ 示範程式碼 ══ */
-function getDemoCode(){
-  var s1='<'+'script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js">'+CST;
-  var s2='<'+'script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4">'+CST;
-  var s3='<'+'script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js">'+CST;
-  var s4='<'+'script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js">'+CST;
-  var app='const {useState,useEffect,useRef}=React;\n'
-    +'const MODES={add:{name:"加法",sign:"+",c:"bg-pink-100",t:"text-pink-600",b:"border-pink-300"},sub:{name:"減法",sign:"-",c:"bg-blue-100",t:"text-blue-600",b:"border-blue-300"},mul:{name:"乘法",sign:"×",c:"bg-green-100",t:"text-green-600",b:"border-green-300"},div:{name:"除法",sign:"÷",c:"bg-purple-100",t:"text-purple-600",b:"border-purple-300"}};\n'
-    +'const sh=a=>a.sort(()=>Math.random()-.5);\n'
-    +'const fmt=ms=>{const t=Math.floor(ms/1000),m=Math.floor(t/60),s=t%60,c=Math.floor((ms%1000)/10);return String(m).padStart(2,"0")+":"+String(s).padStart(2,"0")+"."+String(c).padStart(2,"0");};\n'
-    +'const gen=mode=>{if(mode==="div"){const cells=[];for(let i=0;i<100;i++){let d=Math.floor(Math.random()*9)+1,q=Math.floor(Math.random()*9)+1,n=d*q;while(n<10||n>99){d=Math.floor(Math.random()*9)+1;q=Math.floor(Math.random()*9)+1;n=d*q;}cells.push({id:i,qText:n+"÷"+d,answer:q,userInput:"",status:"empty"});}return{type:"flat",cells};}let cols,rows;if(mode==="add"||mode==="mul"){cols=sh([...Array(10).keys()]);rows=sh([...Array(10).keys()]);}else{cols=sh(Array.from({length:10},(_,i)=>i+10));rows=sh([...Array(10).keys()]);}const cells=[];for(let r=0;r<10;r++)for(let c=0;c<10;c++){const cv=cols[c],rv=rows[r];let a=0;if(mode==="add")a=cv+rv;if(mode==="sub")a=cv-rv;if(mode==="mul")a=cv*rv;cells.push({id:r*10+c,answer:a,qText:cv+MODES[mode].sign+rv,userInput:"",status:"empty"});}return{type:"grid",cols,rows,cells};};\n'
-    +'function App(){const[sc,setSc]=useState("home");const[mode,setMode]=useState(null);const[gd,setGd]=useState(null);const[play,setPlay]=useState(false);const[ms,setMs]=useState(0);const tRef=useRef(null);const sRef=useRef(0);const iRefs=useRef([]);\n'
-    +'useEffect(()=>{if(play){sRef.current=Date.now()-ms;tRef.current=setInterval(()=>setMs(Date.now()-sRef.current),50);}else clearInterval(tRef.current);return()=>clearInterval(tRef.current);},[play]);\n'
-    +'const start=m=>{setMode(m);setGd(gen(m));setMs(0);setPlay(true);setSc("game");iRefs.current=[];};\n'
-    +'const stop=()=>{setPlay(false);setSc("home");};\n'
-    +'const inp=(idx,val)=>{if(!play)return;if(val!==""&&!/^\\d+$/.test(val))return;const nc=[...gd.cells];const cell=nc[idx];cell.userInput=val;if(val===""){cell.status="empty";}else{const as=String(cell.answer);if(val.length>=as.length){if(parseInt(val)===cell.answer){cell.status="correct";if(idx<99)setTimeout(()=>iRefs.current[idx+1]?.focus(),100);}else{cell.status="wrong";setTimeout(()=>{const cur=[...gd.cells];if(cur[idx].status==="wrong"){cur[idx].userInput="";cur[idx].status="empty";setGd({...gd,cells:cur});}},600);}}}setGd({...gd,cells:nc});if(nc.every(c=>c.status==="correct"))setPlay(false);};\n'
-    +'const key=(e,idx)=>{if(e.key==="Enter"||e.key==="Tab"){e.preventDefault();iRefs.current[idx+1]?.focus();}};\n'
-    +'const mc=mode?MODES[mode]:null;const ok=gd?gd.cells.filter(c=>c.status==="correct").length:0;\n'
-    +'if(sc==="home")return(<div className="min-h-screen bg-orange-50 flex flex-col items-center justify-center p-4"><div className="max-w-2xl w-full bg-white rounded-3xl shadow-xl p-8 text-center"><h1 className="text-4xl font-extrabold text-orange-600 mb-2">數學一百格大挑戰</h1><p className="text-gray-600 text-lg mb-8">選一個模式開始</p><div className="grid grid-cols-2 gap-4">{Object.entries(MODES).map(([k,m])=>(<button key={k} onClick={()=>start(k)} className={m.c+" "+m.b+" border-4 rounded-2xl p-6 flex flex-col items-center hover:scale-105 transition"}><span className={"text-5xl font-black "+m.t+" mb-2"}>{m.sign}</span><span className={"text-2xl font-bold "+m.t}>{m.name}</span></button>))}</div></div></div>);\n'
-    +'if(sc==="game"&&gd)return(<div className="min-h-screen bg-gray-50 flex flex-col pt-4 px-2 pb-10"><div className="max-w-5xl mx-auto w-full"><div className="bg-white rounded-2xl shadow-sm p-4 mb-4 flex flex-wrap justify-between items-center gap-4 border-2 border-gray-100"><div className="flex items-center gap-3"><span className={"px-4 py-2 rounded-xl text-xl font-bold "+mc.c+" "+mc.t}>{mc.name}</span><div className="bg-gray-100 px-4 py-2 rounded-xl text-2xl font-mono font-bold text-gray-700">{fmt(ms)}</div></div><div className="flex-1 max-w-xs"><div className="bg-gray-200 rounded-full h-4 overflow-hidden relative"><div className="bg-green-400 h-4 transition-all" style={{width:ok+"%"}}></div><div className="absolute inset-0 flex justify-center items-center text-[10px] font-bold text-gray-600">{ok}/100</div></div></div><button onClick={stop} className="bg-red-100 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-200">結束</button></div><div className="bg-white rounded-3xl shadow-lg p-2 sm:p-4 overflow-x-auto border-4 border-gray-100">{gd.type==="grid"?(<div className="min-w-max grid grid-cols-11 gap-1"><div className={"flex justify-center items-center rounded-xl text-3xl font-black "+mc.c+" "+mc.t}>{mc.sign}</div>{gd.cols.map((c,i)=><div key={i} className={"w-10 h-10 sm:w-12 sm:h-12 flex justify-center items-center rounded-xl text-lg font-bold "+mc.c+" "+mc.t}>{c}</div>)}{gd.rows.map((row,r)=>(<React.Fragment key={r}><div className={"w-10 h-10 sm:w-12 sm:h-12 flex justify-center items-center rounded-xl text-lg font-bold "+mc.c+" "+mc.t}>{row}</div>{gd.cells.slice(r*10,r*10+10).map(cell=>(<input key={cell.id} ref={el=>iRefs.current[cell.id]=el} type="text" inputMode="numeric" maxLength={3} disabled={!play} value={cell.userInput} onChange={e=>inp(cell.id,e.target.value)} onKeyDown={e=>key(e,cell.id)} className={"w-10 h-10 sm:w-12 sm:h-12 text-center text-lg font-bold rounded-xl outline-none transition "+(cell.status==="correct"?"bg-green-200 text-green-800 border-2 border-green-400":cell.status==="wrong"?"bg-orange-100 border-2 border-orange-300":"bg-gray-50 border-2 border-gray-200 focus:bg-yellow-50 focus:border-yellow-400")}/>))}</React.Fragment>))}</div>):(<div className="min-w-max grid grid-cols-10 gap-2">{gd.cells.map(cell=>(<div key={cell.id} className={"flex flex-col items-center p-1 rounded-2xl border-2 "+(cell.status==="correct"?"bg-green-50 border-green-300":"bg-gray-50 border-gray-200")}><div className="text-xs font-bold text-gray-500 mb-1">{cell.qText}</div><input ref={el=>iRefs.current[cell.id]=el} type="text" inputMode="numeric" maxLength={2} disabled={!play} value={cell.userInput} onChange={e=>inp(cell.id,e.target.value)} onKeyDown={e=>key(e,cell.id)} className={"w-8 h-8 sm:w-10 sm:h-10 text-center text-lg font-bold rounded-lg outline-none "+(cell.status==="correct"?"bg-green-200 text-green-800":cell.status==="wrong"?"bg-orange-100":"bg-white")}/></div>))}</div>)}</div></div></div>);\n'
-    +'return null;}\n'
-    +'ReactDOM.createRoot(document.getElementById("root")).render(<App/>);';
-  var bt='<'+'script type="text/babel">'+app+CST;
-  return '<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>數學一百格</title>'+s1+s2+s3+s4+'</head><body><div id="root"></div>'+bt+'</body></html>';
-}
 
 /* ══ 篩選 chips ══ */
 function buildChips(){
@@ -514,7 +489,6 @@ function renderGrid(){
   });
   var sortMode=document.getElementById('sort-select').value;
   vis.sort(function(a,b){
-    if(sortMode==='popular') return (b.views||0)-(a.views||0);
     if(sortMode==='subject'){
       var sa=a.subjects&&a.subjects.length?a.subjects[0]:'龘';
       var sb=b.subjects&&b.subjects.length?b.subjects[0]:'龘';
@@ -555,7 +529,7 @@ function renderGrid(){
       +  '</div>'
       +'</div>'
       +'<div class="card-footer">'
-      +  '<span>'+(t.date||'')+(t.views?' · '+t.views+' 次':'')+'</span>'
+      +  '<span>'+(t.date||'')+'</span>'
       +'</div>';
     card.addEventListener('click',function(){openView(t.id);});
     grid.appendChild(card);
@@ -565,8 +539,6 @@ function renderGrid(){
 /* ══ View modal ══ */
 function openView(id){
   var t=tools.filter(function(x){return x.id===id;})[0]; if(!t) return;
-  t.views=(t.views||0)+1;
-  saveLocalTools();
 
   document.getElementById('view-title').textContent=t.title;
   document.getElementById('view-desc').textContent=t.desc;
@@ -612,7 +584,6 @@ function switchTab(name){
 function openAdd(){
   document.getElementById('modal-title-text').textContent='新增工具';
   ['inp-code','inp-title','inp-desc','inp-url'].forEach(function(id){document.getElementById(id).value='';});
-  _pendingThumb=null;
   setSt('',''); buildPickers();
   document.getElementById('add-form-section').style.display='';
   document.getElementById('add-json-section').style.display='none';
@@ -658,46 +629,6 @@ function setSt(msg,type){
   el.textContent=msg; el.className='ai-status'+(msg?' vis':'')+' '+(type||'');
 }
 
-/* ══ 縮圖 ══ */
-function buildThumbInjection(){
-  var inner='\n(function(){\n'
-    +'  function send(url){ window.parent.postMessage({type:"THUMB_DONE",url:url},"*"); }\n'
-    +'  function capture(){ if(!window.html2canvas){send(null);return;} html2canvas(document.body,{width:800,height:500,scale:.75,useCORS:true,logging:false,backgroundColor:"#ffffff"}).then(function(c){send(c.toDataURL("image/jpeg",.85));}).catch(function(){send(null);}); }\n'
-    +'  function loadH2C(cb){ var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";s.onload=cb;s.onerror=function(){send(null);};document.head.appendChild(s); }\n'
-    +'  setTimeout(function(){ loadH2C(function(){ setTimeout(capture,800); }); }, 2500);\n'
-    +'})();\n';
-  return '<'+'script>'+inner+CST;
-}
-window.addEventListener('message',function(e){
-  if(e.data&&e.data.type==='THUMB_DONE'&&_thumbResolve){
-    clearTimeout(_thumbTimer);
-    var fn=_thumbResolve; _thumbResolve=null; fn(e.data.url||null);
-  }
-});
-function doCapture(code){
-  return new Promise(function(resolve){
-    var processed=rewriteCDN(code);
-    var injection=buildThumbInjection();
-    var injected=processed.indexOf('</body>')>=0?processed.replace(/<\/body>/i,injection+'</body>'):processed+injection;
-    var iframe=document.getElementById('thumb-iframe');
-    _thumbResolve=resolve;
-    _thumbTimer=setTimeout(function(){if(_thumbResolve){var fn=_thumbResolve;_thumbResolve=null;fn(null);}},15000);
-    iframe.removeAttribute('src'); iframe.srcdoc=injected;
-  });
-}
-function triggerThumb(){
-  var code=document.getElementById('inp-code').value.trim();
-  if(!code){setSt('請先貼上程式碼','err');return Promise.resolve(null);}
-  var btn=document.getElementById('thumb-btn');
-  btn.disabled=true; btn.innerHTML='<span class="spinner"></span> 截圖中...';
-  setSt('截圖中，約 5 秒...','');
-  return doCapture(code).then(function(url){
-    btn.disabled=false; btn.textContent='重新截圖';
-    if(url){_pendingThumb=url;setSt('截圖成功','ok');}
-    else setSt('截圖失敗（工具仍可使用）','err');
-    return url;
-  });
-}
 
 /* ══ 產生 JSON ══ */
 async function generateJSON(){
@@ -707,12 +638,7 @@ async function generateJSON(){
   saveBtn.disabled=true; saveBtn.textContent='產生中...';
 
   var code=document.getElementById('inp-code').value.trim();
-  var thumb=_pendingThumb||'';
-
-  if(!thumb&&code){
-    setSt('自動生成縮圖...','');
-    thumb=await triggerThumb()||'';
-  }
+  var thumb='';   /* 不再自動截圖；卡片縮圖改用即時預覽 */
 
   var entry={
     id: 'tool_'+Date.now(),
@@ -724,8 +650,7 @@ async function generateJSON(){
     url:  document.getElementById('inp-url').value.trim(),
     code: code,
     thumb: thumb,
-    date: new Date().toISOString().slice(0,10),
-    views: 0
+    date: new Date().toISOString().slice(0,10)
   };
 
   _jsonStr = JSON.stringify(entry, null, 2);
