@@ -198,7 +198,7 @@ main{padding:2rem 3rem}
       <button class="tab-btn" data-tab="code" onclick="switchTab('code')">原始碼</button>
     </div>
     <div class="tab-panel active" id="tab-live">
-      <iframe id="live-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-pointer-lock allow-modals" allow="microphone;autoplay" allowfullscreen></iframe>
+      <iframe id="live-iframe" sandbox="allow-scripts allow-forms allow-popups allow-pointer-lock allow-modals" allow="microphone;autoplay" allowfullscreen></iframe>
       <div class="live-toolbar">
         <span class="live-label" id="live-label"></span>
         <button class="open-full-btn" id="open-full-btn">在新分頁開啟</button>
@@ -275,10 +275,12 @@ main{padding:2rem 3rem}
     <div class="add-body">
       <div class="field">
         <label>Gemini API Key（AI 自動分析用）</label>
-        <input type="password" id="inp-apikey" placeholder="貼上你的 Gemini API Key">
+        <input type="password" id="inp-apikey" placeholder="貼上你的 Gemini API Key" autocomplete="off" spellcheck="false">
         <div class="hint">
-          前往 <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> 免費取得 Key。<br>
-          Key 只存在瀏覽器 localStorage，不會上傳。不填也可以手動填寫說明。
+          前往 <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> 免費取得 Key。不填也可以手動填寫說明。<br>
+          這把 Key 只留在目前這個分頁，關掉或重新整理就會消失，下次要重新貼一次。<br>
+          不幫你記住是刻意的——存進瀏覽器的話，這個網址底下其他頁面也讀得到，
+          Key 被拿走就會有人用掉你的額度。
         </div>
       </div>
       <div class="field">
@@ -307,14 +309,11 @@ main{padding:2rem 3rem}
 </div>
 
 <div id="toast"></div>
-<iframe id="thumb-iframe" style="position:fixed;left:-9999px;top:0;width:800px;height:500px;border:none;visibility:hidden;pointer-events:none" sandbox="allow-scripts allow-same-origin"></iframe>
+<iframe id="thumb-iframe" style="position:fixed;left:-9999px;top:0;width:800px;height:500px;border:none;visibility:hidden;pointer-events:none" sandbox="allow-scripts"></iframe>
 
 <script>
 /* ══ 避免字面 close-script 字串 ══ */
 var CST = '<' + '/' + 'script' + '>';
-var CST_RX = new RegExp(CST, 'gi');
-var CST_ESC = '<' + '\\' + '/' + 'script' + '>';
-function escClose(html){ return String(html).replace(CST_RX, CST_ESC); }
 
 function escAttr(str){
   return String(str)
@@ -332,12 +331,18 @@ function rewriteCDN(c){
   c=c.replace(/https:\/\/cdn\.tailwindcss\.com/g,'https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4');
   return c;
 }
-function prepareForIframe(code){ return escClose(rewriteCDN(code)); }
+/* srcdoc 是 HTML 情境，不要對程式碼做 <\/script> 跳脫 */
+function prepareForIframe(code){ return rewriteCDN(code); }
 
 /* ══ 常數 ══ */
-var SK_API   = 'ap_apikey';
+var SK_API   = 'ap_apikey';   /* 僅用於清除舊版殘留，不再寫入 */
 var SK_MODEL = 'ap_model';
 var SK_JURL  = 'ap_jsonurl';
+
+/* API Key 只存在這個分頁的記憶體，重新整理即消失。
+   理由：本站與其他專案共用 x9179996-sudo.github.io 這一個 origin，
+   localStorage 在同 origin 下沒有頁面隔離，任一頁面都讀得到。 */
+var _apiKey = '';
 var SUBJECTS = ['英語','數學','國語','自然','社會','綜合','音樂','美勞','體育','特教'];
 var GRADES   = ['低年級','中年級','高年級','全年級'];
 var FUNCS    = ['語音','遊戲','測驗','記錄','閃卡','計算','故事','動畫','繪圖','查詢'];
@@ -358,13 +363,22 @@ function showToast(msg){
 }
 
 /* ══ 設定 ══ */
-function getApiKey(){ try{return localStorage.getItem(SK_API)||'';}catch(e){return '';} }
+function getApiKey(){ return _apiKey; }
+
+/* 舊版把 API Key 寫進 localStorage，已不再使用；開頁時清掉殘留並告知。 */
+function purgeLegacyApiKey(){
+  var hadKey=false;
+  try{
+    hadKey = localStorage.getItem(SK_API)!==null;  if(hadKey) localStorage.removeItem(SK_API);
+  }catch(e){}
+  if(hadKey) showToast('已清除舊設定：API Key 不再儲存（請重新輸入）');
+}
 function getModel(){  try{return localStorage.getItem(SK_MODEL)||'gemini-2.5-flash';}catch(e){return 'gemini-2.5-flash';} }
 function getJsonUrl(){ try{return localStorage.getItem(SK_JURL)||'';}catch(e){return '';} }
 
 function updateSettingsBtn(){
   var btn=document.getElementById('settings-btn');
-  if(getApiKey()){btn.classList.add('has-key');btn.textContent='⚙ API 已設定';}
+  if(getApiKey()){btn.classList.add('has-key');btn.textContent='⚙ API 已設定（本次）';}
   else{btn.classList.remove('has-key');btn.textContent='⚙ API 設定';}
 }
 function openSettings(){
@@ -374,8 +388,8 @@ function openSettings(){
   document.getElementById('settings-modal').classList.add('open');
 }
 function saveSettings(){
+  _apiKey = document.getElementById('inp-apikey').value.trim();  /* 只進記憶體 */
   try{
-    localStorage.setItem(SK_API, document.getElementById('inp-apikey').value.trim());
     localStorage.setItem(SK_MODEL, document.getElementById('inp-model').value);
     localStorage.setItem(SK_JURL, document.getElementById('inp-json-url').value.trim());
   }catch(e){}
@@ -523,7 +537,7 @@ function renderGrid(){
       thumbHtml='<img src="'+t.thumb+'" alt="">';
     } else if(t.code){
       var safe=prepareForIframe(t.code);
-      thumbHtml='<iframe srcdoc="'+escAttr(safe)+'" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe><div class="thumb-overlay"></div>';
+      thumbHtml='<iframe srcdoc="'+escAttr(safe)+'" sandbox="allow-scripts" loading="lazy"></iframe><div class="thumb-overlay"></div>';
     } else if(t.url){
       thumbHtml='<div class="thumb-placeholder">🔗 外部連結</div>';
     } else {
@@ -668,7 +682,7 @@ function doCapture(code){
     var iframe=document.getElementById('thumb-iframe');
     _thumbResolve=resolve;
     _thumbTimer=setTimeout(function(){if(_thumbResolve){var fn=_thumbResolve;_thumbResolve=null;fn(null);}},15000);
-    iframe.removeAttribute('src'); iframe.srcdoc=escClose(injected);
+    iframe.removeAttribute('src'); iframe.srcdoc=injected;
   });
 }
 function triggerThumb(){
@@ -742,7 +756,7 @@ document.getElementById('add-modal').addEventListener('click',function(e){if(e.t
 document.getElementById('settings-modal').addEventListener('click',function(e){if(e.target===e.currentTarget)closeModal('settings-modal');});
 
 /* ══ Init ══ */
-loadTools(); buildChips(); updateSettingsBtn();
+purgeLegacyApiKey(); loadTools(); buildChips(); updateSettingsBtn();
 </script>
 </body>
 </html>
